@@ -1,0 +1,16 @@
+# Core (offline-capable)
+scikit-learn>=1.4
+numpy>=1.26
+pandas>=2.0
+requests>=2.31
+huggingface_hub>=0.20
+
+# Real benchmark loading (Tier 1 in data/load_qa_dataset.py) — needs internet
+datasets>=2.19
+
+# Dense semantic retrieval for the evidence corpus
+sentence-transformers>=2.7
+faiss-cpu>=1.8
+
+# Citation-quality NLI model
+transformers>=4.44

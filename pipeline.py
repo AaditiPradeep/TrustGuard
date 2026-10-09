@@ -11,9 +11,9 @@ Person 2
 Person 3
     citation extraction/resolution -> citation-quality judgement
 
-Source Reliability / RAVE is intentionally not folded in here yet because it
-is a separate project stage. The returned metric dictionary is designed so
-RAVE can be added later without changing the existing module interfaces.
+Source Reliability / RAVE scores authority and independent corroboration of
+the retrieved evidence. It remains separate from Evidence Support, which
+measures whether that evidence supports the generated answer.
 """
 
 from __future__ import annotations
@@ -24,6 +24,10 @@ from typing import Callable, Optional, Sequence
 from data.schema import EvidencePassage
 from metrics.answer_stability import answer_stability, compute_answer_stability
 from metrics.evidence_support_score import calculate_response_evidence_score
+from metrics.source_reliability import (
+    calculate_response_rave,
+    run_rave_sensitivity_analysis,
+)
 from retrieval.hybrid import HybridRetriever
 from verification.claim_extractor import extract_claims
 from verification.evidence_support import verify_claims
@@ -36,6 +40,7 @@ class TrustGuardResult:
     answer_origin: str
     claims: list[dict]
     evidence_support: dict
+    source_reliability: dict
     answer_stability: Optional[dict]
     citation_quality: Optional[dict]
 
@@ -126,6 +131,10 @@ def run_trustguard(
 
     evidence_payload = evidence_score.to_dict()
     evidence_payload["claim_verification"] = [r.to_dict() for r in evidence_results]
+    rave_payload = calculate_response_rave(evidence_results).to_dict()
+    rave_payload["sensitivity_analysis"] = run_rave_sensitivity_analysis(
+        evidence_results
+    )
 
     # Person 2: response-level stability.
     stability_payload = None
@@ -183,6 +192,7 @@ def run_trustguard(
         answer_origin=answer_origin,
         claims=[claim.to_dict() for claim in claims],
         evidence_support=evidence_payload,
+        source_reliability=rave_payload,
         answer_stability=stability_payload,
         citation_quality=citation_payload,
     )

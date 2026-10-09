@@ -52,7 +52,7 @@ class PairwiseSimilarity:
     i: int          # index into the responses list
     j: int
     jaccard: float
-    semantic: float
+    semantic: float | None
     hybrid: float
 
 
@@ -62,7 +62,7 @@ class StabilityResult:
     pairwise: list[PairwiseSimilarity]
     average_stability: float  # mean of all pairwise hybrid scores
     average_jaccard: float
-    average_semantic: float
+    average_semantic: float | None
     semantic_weight: float
 
     def to_dict(self) -> dict:
@@ -110,17 +110,18 @@ def _semantic_embeddings(responses: list[str]):
     """Embed all responses together using the local MiniLM model."""
     try:
         from sentence_transformers import SentenceTransformer
-    except ImportError as error:
-        raise RuntimeError(
-            "Semantic Answer Stability requires sentence-transformers."
-        ) from error
 
-    print("Computing semantic similarity with local MiniLM...")
-    model = SentenceTransformer(
-        "sentence-transformers/all-MiniLM-L6-v2",
-        local_files_only=True,
-    )
-    return model.encode(responses, normalize_embeddings=True)
+        print("Computing semantic similarity with local MiniLM...")
+        model = SentenceTransformer(
+            "sentence-transformers/all-MiniLM-L6-v2",
+            local_files_only=True,
+        )
+        return model.encode(responses, normalize_embeddings=True)
+    except (ImportError, OSError, RuntimeError):
+        # On managed Windows systems, application-control policy can block
+        # native extensions used by sentence-transformers. Stability remains
+        # available through its lexical Jaccard fallback.
+        return None
 
 
 def compute_answer_stability(
@@ -144,8 +145,16 @@ def compute_answer_stability(
     pairwise = []
     for i, j in combinations(range(len(responses)), 2):
         lexical = jaccard_similarity(responses[i], responses[j])
-        semantic = max(0.0, min(1.0, float(embeddings[i] @ embeddings[j])))
-        hybrid = semantic_weight * semantic + lexical_weight * lexical
+        semantic = (
+            max(0.0, min(1.0, float(embeddings[i] @ embeddings[j])))
+            if embeddings is not None
+            else None
+        )
+        hybrid = (
+            semantic_weight * semantic + lexical_weight * lexical
+            if semantic is not None
+            else lexical
+        )
         pairwise.append(
             PairwiseSimilarity(
                 i=i,
@@ -161,8 +170,13 @@ def compute_answer_stability(
         pairwise=pairwise,
         average_stability=sum(p.hybrid for p in pairwise) / len(pairwise),
         average_jaccard=sum(p.jaccard for p in pairwise) / len(pairwise),
-        average_semantic=sum(p.semantic for p in pairwise) / len(pairwise),
-        semantic_weight=semantic_weight,
+        average_semantic=(
+            sum(p.semantic for p in pairwise if p.semantic is not None)
+            / len(pairwise)
+            if embeddings is not None
+            else None
+        ),
+        semantic_weight=semantic_weight if embeddings is not None else 0.0,
     )
 
 

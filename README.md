@@ -45,14 +45,21 @@ formula (`Ri = α·Bi + (1−α)·Ci`):
 
 | Source | Tier | Bi | What it's good for |
 |---|---|---|---|
-| WHO, openFDA, CDC | regulatory | 0.93–0.95 | drug interactions, dosage, safety warnings — your highest-stakes claim category |
+| WHO, openFDA labels, CDC | regulatory | 0.95 | drug interactions, dosage, safety warnings — your highest-stakes claim category |
 | MedlinePlus | reference | 0.85 | general consumer-health grounding |
-| PubMed | primary_literature | 0.75 | broad claim coverage, but quality varies more — lean on `Ci` (corroboration, built in Phase 4) here |
+| PubMed | primary_literature | 0.75 | broad claim coverage; corroboration is calculated per PMID |
 
-`Ci` (corroboration) isn't computed yet — that's Phase 4 (Source Reliability
-/ RAVE) per your work plan. This layer only establishes `Bi` and gets
-retrievable passages into a consistent schema so Phase 4 has something to
-corroborate against.
+RAVE now combines baseline authority (`Bi`) with per-claim independent-source
+corroboration (`Ci`). A lone source retains its displayed authority but is
+marked `UNCORROBORATED` and has no RAVE score until an independent peer is
+available. RAVE reports evidence-source reliability separately from whether
+the answer itself is supported.
+
+Baseline authority is a documented tier prior, not a learned probability.
+`data.source_registry.authority_rubric()` exposes the weighted 1–5 authority
+rubric behind each tier. The integrated report also includes conservative,
+current, and literature-favouring sensitivity scenarios so reviewers can see
+how much the final RAVE score depends on those assumptions.
 
 ## Running it
 
@@ -146,12 +153,13 @@ The integrated flow is:
 
 1. `verification.claim_extractor` — atomic claim extraction.
 2. `retrieval.hybrid` — TF-IDF + dense FAISS retrieval with RRF and deduplication.
-3. `verification.evidence_support` — local Ollama passage-level support/contradiction judgement.
-4. `metrics.evidence_support_score` — relevance-weighted claim and response Evidence Support scores.
-5. `metrics.answer_stability` — a 70% MiniLM semantic cosine / 30% Jaccard hybrid score across three locally sampled Ollama responses (temperature 0.7).
-6. `citation.pipeline` — citation extraction/resolution + MiniLM/NLI citation-quality scoring.
+3. `verification.evidence_support` — local DeBERTa NLI passage-level support/contradiction judgement.
+4. `metrics.evidence_support_score` — net, relevance-weighted NLI entailment-minus-contradiction Evidence Support scores.
+5. `metrics.source_reliability` — RAVE authority and independent corroboration scores for retrieved sources.
+6. `metrics.answer_stability` — a 70% MiniLM semantic cosine / 30% Jaccard hybrid score across three locally sampled Ollama responses (temperature 0.7).
+7. `citation.pipeline` — citation extraction/resolution + MiniLM/NLI citation-quality scoring.
 
-When `answer` is omitted, local Ollama runs `qwen3:1.7b` to generate a concise answer from `question` (up to 250 tokens). The same local model extracts claims and judges Evidence Support. Citation Quality scores those exact retrieved passages automatically. Answer Stability then samples three varied local answers at temperature 0.7 and scores their pairwise agreement. Supply `stability_responses` when you want to score a specific set of answers instead.
+When `answer` is omitted, local Ollama runs `qwen3:1.7b` to generate a concise answer from `question` (up to 250 tokens). The same local model extracts claims. Local DeBERTa NLI judges Evidence Support, RAVE evaluates the authority and corroboration of those retrieved sources, and Citation Quality scores the same passages automatically. Answer Stability then samples three varied local answers at temperature 0.7 and scores their pairwise agreement. Supply `stability_responses` when you want to score a specific set of answers instead.
 
 For an interactive run, use:
 
@@ -170,8 +178,8 @@ The script asks for a question, generates an answer locally, and evaluates it. N
 ### Integration notes
 
 - `data.schema` is the canonical schema. `data.evidence_schema` is now only a backwards-compatible re-export so teammate code does not create a second incompatible `EvidencePassage` type.
-- Hybrid RRF scores are ranking scores, not cosine similarities. Evidence Support therefore uses dense cosine relevance when available, then TF-IDF similarity, then the generic retrieval score as a fallback.
-- Source Reliability / RAVE is still intentionally separate and can be added later to the metric dictionary without changing the current interfaces.
+- Hybrid RRF scores are ranking scores, not cosine similarities. Evidence Support normalizes the final fused retrieval score only to weight the NLI judgments relative to one another for a claim.
+- RAVE measures the reliability and agreement of retrieved evidence; it does not determine whether the generated answer is supported. Organisation-level independence is approximate because WHO, CDC, and MedlinePlus can rely on overlapping guidance.
 
 Run the offline integration checks with:
 

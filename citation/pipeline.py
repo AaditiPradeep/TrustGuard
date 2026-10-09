@@ -8,7 +8,10 @@ response whose citations were all judged irrelevant.
 
 from __future__ import annotations
 
-from dataclasses import asdict
+from dataclasses import asdict, is_dataclass
+from collections import Counter
+from math import log, sqrt
+import re
 from typing import TYPE_CHECKING, Sequence
 
 from citation.citation_extractor import (
@@ -20,6 +23,71 @@ from data.schema import Claim, EvidencePassage
 
 if TYPE_CHECKING:
     from verification.evidence_support import EvidenceSupportResult
+
+
+def _as_dicts(judgements) -> list[dict]:
+    """Convert either judge dataclasses or fallback dictionaries to dicts."""
+    return [asdict(item) if is_dataclass(item) else dict(item) for item in judgements]
+
+
+def _tfidf_fallback(pairs: Sequence[dict]) -> dict:
+    """Score claim/source overlap without transformer or native DLL dependencies.
+
+    This is deliberately a lexical relevance fallback.  It keeps the report
+    usable when Windows policy blocks the MiniLM/DeBERTa dependencies, but it
+    does not claim to be an NLI entailment judgement.
+    """
+    judgements = []
+    for pair in pairs:
+        claim_tokens = re.findall(r"[a-z0-9]+", pair["claim"].lower())
+        source_tokens = re.findall(r"[a-z0-9]+", pair["source_text"].lower())
+        claim_counts, source_counts = Counter(claim_tokens), Counter(source_tokens)
+        vocabulary = set(claim_counts) | set(source_counts)
+        # Two-document TF-IDF cosine, implemented here to remain available
+        # when the environment blocks compiled ML packages.
+        weights = {
+            token: log(3 / (1 + int(token in claim_counts) + int(token in source_counts))) + 1
+            for token in vocabulary
+        }
+        dot = sum(
+            claim_counts[token] * source_counts[token] * weights[token] ** 2
+            for token in vocabulary
+        )
+        claim_norm = sqrt(sum((count * weights[token]) ** 2 for token, count in claim_counts.items()))
+        source_norm = sqrt(sum((count * weights[token]) ** 2 for token, count in source_counts.items()))
+        score = dot / (claim_norm * source_norm) if claim_norm and source_norm else 0.0
+
+        label = "DIRECT" if score >= 0.20 else "INDIRECT" if score >= 0.05 else "IRRELEVANT"
+        judgements.append({
+            "claim_id": pair["claim_id"],
+            "claim_text": pair["claim"],
+            "citation_id": pair["citation_id"],
+            "source_name": pair["source_name"],
+            "source_text": pair["source_text"],
+            "label": label,
+            "score": score,
+            "claim_source_similarity": score,
+            "entailment_probability": None,
+            "contradiction_probability": None,
+            "neutral_probability": None,
+            "rationale": "TF-IDF lexical fallback; MiniLM/DeBERTa NLI was unavailable.",
+        })
+
+    quality = sum(item["score"] for item in judgements) / len(judgements) if judgements else 0.0
+    return {"judgements": judgements, "citation_quality_score": quality}
+
+
+def _judge_with_fallback(pairs: Sequence[dict], judge=None) -> tuple[dict, str]:
+    """Use the semantic/NLI judge, falling back only for blocked dependencies."""
+    if not pairs:
+        return {"judgements": [], "citation_quality_score": 0.0}, "not_applicable"
+    try:
+        if judge is None:
+            from citation.minilm_judge import MiniLMCitationJudge
+            judge = MiniLMCitationJudge()
+        return judge.judge_claims(pairs), "minilm_deberta_nli"
+    except (ImportError, OSError, RuntimeError):
+        return _tfidf_fallback(pairs), "tfidf_lexical_fallback"
 
 
 def evaluate_citations(
@@ -82,10 +150,6 @@ def evaluate_citations(
             "judgements": [],
         }
 
-    if judge is None:
-        from citation.minilm_judge import MiniLMCitationJudge
-        judge = MiniLMCitationJudge()
-
     resolved_pairs = [pair for pair in pairs if pair.source_text]
     unresolved_pairs = [pair for pair in pairs if not pair.source_text]
 
@@ -100,14 +164,8 @@ def evaluate_citations(
         for pair in resolved_pairs
     ]
 
-    judged_report = judge.judge_claims(judge_input) if judge_input else {
-        "judgements": [],
-        "citation_quality_score": 0.0,
-        "counts": {"DIRECT": 0, "INDIRECT": 0, "IRRELEVANT": 0},
-        "total_pairs": 0,
-    }
-
-    judgement_dicts = [asdict(j) for j in judged_report["judgements"]]
+    judged_report, method = _judge_with_fallback(judge_input, judge)
+    judgement_dicts = _as_dicts(judged_report["judgements"])
 
     # A citation that cannot be resolved to the source list is an attribution
     # failure. Keep it explicit instead of feeding an empty source to MiniLM.
@@ -141,6 +199,7 @@ def evaluate_citations(
 
     return {
         "available": True,
+        "method": method,
         "citation_quality_score": quality,
         "citation_quality_percent": quality * 100.0,
         "citation_coverage": coverage,
@@ -184,15 +243,8 @@ def evaluate_retrieved_citations(
                 verdict_by_id.get(evidence_id, "UNJUDGED")
             )
 
-    if judge is None:
-        from citation.minilm_judge import MiniLMCitationJudge
-        judge = MiniLMCitationJudge()
-
-    judged_report = judge.judge_claims(pairs) if pairs else {
-        "judgements": [],
-        "citation_quality_score": 0.0,
-    }
-    judgements = [asdict(item) for item in judged_report["judgements"]]
+    judged_report, method = _judge_with_fallback(pairs, judge)
+    judgements = _as_dicts(judged_report["judgements"])
 
     for item in judgements:
         evidence_id = item["citation_id"].removeprefix("retrieved-")
@@ -213,6 +265,7 @@ def evaluate_retrieved_citations(
     return {
         "available": bool(pairs),
         "mode": "retrieved_evidence",
+        "method": method,
         "citation_quality_score": judged_report["citation_quality_score"],
         "citation_quality_percent": judged_report["citation_quality_score"] * 100.0,
         "citation_count": len(pairs),

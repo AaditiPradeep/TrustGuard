@@ -95,6 +95,40 @@ else:
 print(f"Jaccard overlap: {stability['average_jaccard']:.4f}")
 print(f"Hybrid stability score: {stability['stability_percent']:.2f}/100")
 
+lay_report = result.trust_report
+print("\n" + "-" * 80)
+print("PLAIN-LANGUAGE TRUST SUMMARY")
+print("-" * 80)
+print(lay_report["plain_language_summary"])
+print(f"\nRecommendation: {lay_report['recommendation']}")
+print(lay_report["recommendation_reason"])
+if lay_report["why"]:
+    print("Why:")
+    for reason in lay_report["why"]:
+        print(f"- {reason}")
+
+print("\nHow the answer was checked:")
+for metric in lay_report["metric_scores"]:
+    score = "unavailable" if metric["score"] is None else f"{metric['score']:.2f}/100"
+    coverage = (
+        f" RAVE was calculable for {metric['coverage']:.1f}% of claims."
+        if metric["name"] == "Source reliability" and metric["coverage"] is not None else ""
+    )
+    print(f"- {metric['name']}: {score}. {metric['explanation']}{coverage}")
+
+print("\nClaims in the answer:")
+for index, claim in enumerate(lay_report["claims"], start=1):
+    print(f"{index}. {claim['claim']}")
+    print(f"   Result: {claim['status']} ({claim['category']} trust; score: {claim['trust_score']})")
+    print(f"   Evidence support: {claim['metric_scores']['evidence_support']}")
+    print(f"   Source reliability: {claim['metric_scores']['source_reliability']}")
+    print(f"   Citation quality: {claim['metric_scores']['citation_quality']}")
+    print(f"   Answer consistency: {claim['metric_scores']['answer_consistency']} (whole answer)")
+    print(f"   {claim['explanation']}")
+
+if lay_report["missing_information"]:
+    print("\nUnavailable checks: " + ", ".join(lay_report["missing_information"]))
+
 print("\n" + "=" * 80)
 print("END OF REPORT")
 print("=" * 80)

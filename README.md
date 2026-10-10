@@ -158,6 +158,8 @@ The integrated flow is:
 5. `metrics.source_reliability` — RAVE authority and independent corroboration scores for retrieved sources.
 6. `metrics.answer_stability` — a 70% MiniLM semantic cosine / 30% Jaccard hybrid score across three locally sampled Ollama responses (temperature 0.7).
 7. `citation.pipeline` — citation extraction/resolution + MiniLM/NLI citation-quality scoring.
+8. `trust_aggregator` — availability-aware weighted composite of the four existing metric outputs (40% evidence support, 25% source reliability, 20% answer consistency, 15% citation quality).
+9. `decision_engine` and `trust_report` — accept/regenerate recommendation plus a plain-language, claim-by-claim explanation.
 
 When `answer` is omitted, local Ollama runs `qwen3:1.7b` to generate a concise answer from `question` (up to 250 tokens). The same local model extracts claims. Local DeBERTa NLI judges Evidence Support, RAVE evaluates the authority and corroboration of those retrieved sources, and Citation Quality scores the same passages automatically. Answer Stability then samples three varied local answers at temperature 0.7 and scores their pairwise agreement. Supply `stability_responses` when you want to score a specific set of answers instead.
 
@@ -186,3 +188,10 @@ Run the offline integration checks with:
 ```bash
 pytest -q
 ```
+
+The result dictionary also includes `trust_aggregation`, `decision`, and
+`trust_report`. `trust_report` is intended for an end user: it spells out the
+claims being checked, each claim's available scores, the overall score and
+recommendation, and why TrustGuard reached that recommendation. Missing scores
+are identified rather than treated as zero; the remaining metric weights are
+redistributed for the composite.

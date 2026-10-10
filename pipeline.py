@@ -31,6 +31,9 @@ from metrics.source_reliability import (
 from retrieval.hybrid import HybridRetriever
 from verification.claim_extractor import extract_claims
 from verification.evidence_support import verify_claims
+from trust_aggregator import aggregate_trust
+from decision_engine import decide_response
+from trust_report import build_trust_report
 
 
 @dataclass
@@ -43,6 +46,9 @@ class TrustGuardResult:
     source_reliability: dict
     answer_stability: Optional[dict]
     citation_quality: Optional[dict]
+    trust_aggregation: Optional[dict] = None
+    decision: Optional[dict] = None
+    trust_report: Optional[dict] = None
 
     def to_dict(self) -> dict:
         return asdict(self)
@@ -186,6 +192,12 @@ def run_trustguard(
             judge=citation_judge,
         )
 
+    aggregation = aggregate_trust(
+        evidence_payload, rave_payload, stability_payload, citation_payload
+    ).to_dict()
+    decision = decide_response(aggregation).to_dict()
+    report = build_trust_report(question, answer, aggregation, decision)
+
     return TrustGuardResult(
         question=question,
         answer=answer,
@@ -195,4 +207,7 @@ def run_trustguard(
         source_reliability=rave_payload,
         answer_stability=stability_payload,
         citation_quality=citation_payload,
+        trust_aggregation=aggregation,
+        decision=decision,
+        trust_report=report,
     )

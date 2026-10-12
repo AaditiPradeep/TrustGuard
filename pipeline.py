@@ -11,9 +11,8 @@ Person 2
 Person 3
     citation extraction/resolution -> citation-quality judgement
 
-Source Reliability / RAVE scores authority and independent corroboration of
-the retrieved evidence. It remains separate from Evidence Support, which
-measures whether that evidence supports the generated answer.
+Source Reliability / RAVE combines source authority with whether retrieved
+evidence supports or contradicts the generated answer.
 """
 
 from __future__ import annotations
@@ -26,7 +25,6 @@ from metrics.answer_stability import answer_stability, compute_answer_stability
 from metrics.evidence_support_score import calculate_response_evidence_score
 from metrics.source_reliability import (
     calculate_response_rave,
-    run_rave_sensitivity_analysis,
 )
 from retrieval.hybrid import HybridRetriever
 from verification.claim_extractor import extract_claims
@@ -138,9 +136,6 @@ def run_trustguard(
     evidence_payload = evidence_score.to_dict()
     evidence_payload["claim_verification"] = [r.to_dict() for r in evidence_results]
     rave_payload = calculate_response_rave(evidence_results).to_dict()
-    rave_payload["sensitivity_analysis"] = run_rave_sensitivity_analysis(
-        evidence_results
-    )
 
     # Person 2: response-level stability.
     stability_payload = None

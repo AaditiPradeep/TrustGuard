@@ -1,10 +1,8 @@
 """
 TrustGuard — trusted evidence source registry.
 
-This is the *baseline authority* half of RAVE:  Ri = alpha * Bi + (1 - alpha) * Ci
-Bi (baseline authority) comes from this static hierarchy.
-Ci (corroboration) is computed later, per-claim, in the Source Reliability module,
-by checking how often a source's claims agree with independently-corroborated ones.
+This defines the baseline authority tiers used by RAVE. The Source Reliability
+module combines each tier with NLI support or contradiction using banded ranges.
 
 Keeping Bi here as a single source of truth means the Evidence Retrieval,
 Source Reliability, and Citation Quality modules all agree on what "tier" a
@@ -53,9 +51,7 @@ class SourceDef:
     notes: str = ""
 
 
-# Baseline authority (Bi) reflects editorial/regulatory rigor, not popularity.
-# Tune these during Phase 4 (Source Reliability / RAVE) once corroboration
-# data (Ci) is available to calibrate against.
+# Baseline authority reflects editorial/regulatory rigor, not popularity.
 SOURCE_REGISTRY: dict[str, SourceDef] = {
     "who": SourceDef(
         name="WHO",
@@ -102,7 +98,7 @@ SOURCE_REGISTRY: dict[str, SourceDef] = {
         notes=(
             "Primary literature via NCBI E-utilities. Wide quality variance "
             "(preprints excluded, but study quality still varies) -> Bi set "
-            "lower than regulatory/reference tiers; Ci should do more work here."
+            "lower than regulatory/reference tiers."
         ),
     ),
     "pubmedqa_context": SourceDef(

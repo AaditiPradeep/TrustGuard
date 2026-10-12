@@ -40,26 +40,26 @@ trustguard/
 
 **Evidence corpus** (`data/fetch_*.py`, `data/build_corpus.py`)
 Three source tiers matching `source_registry.py`'s baseline-authority
-hierarchy, which is a direct implementation of the `Bi` term in your RAVE
-formula (`Ri = α·Bi + (1−α)·Ci`):
+hierarchy. RAVE uses these tiers with DeBERTa's support or contradiction
+confidence to score how strongly evidence supports the generated answer:
 
 | Source | Tier | Bi | What it's good for |
 |---|---|---|---|
 | WHO, openFDA labels, CDC | regulatory | 0.95 | drug interactions, dosage, safety warnings — your highest-stakes claim category |
 | MedlinePlus | reference | 0.85 | general consumer-health grounding |
-| PubMed | primary_literature | 0.75 | broad claim coverage; corroboration is calculated per PMID |
+| PubMed | primary_literature | 0.75 | broad claim coverage; independence is calculated per PMID |
 
-RAVE now combines baseline authority (`Bi`) with per-claim independent-source
-corroboration (`Ci`). A lone source retains its displayed authority but is
-marked `UNCORROBORATED` and has no RAVE score until an independent peer is
-available. RAVE reports evidence-source reliability separately from whether
-the answer itself is supported.
+RAVE uses explicit score bands. High-tier support scores `85–100`,
+medium-tier support scores `75–90`, and lower-tier support scores `65–80`.
+High-tier contradiction scores `0–15`, medium-tier contradiction scores
+`10–25`, and lower-tier contradiction scores `20–35`. Evidence that is not
+strong enough to support or contradict the claim scores `50` (inconclusive).
+Peer agreement and the number of independent sources remain diagnostics; they
+do not raise the score of evidence that contradicts the answer.
 
-Baseline authority is a documented tier prior, not a learned probability.
+Baseline authority is a documented tier policy, not a learned probability.
 `data.source_registry.authority_rubric()` exposes the weighted 1–5 authority
-rubric behind each tier. The integrated report also includes conservative,
-current, and literature-favouring sensitivity scenarios so reviewers can see
-how much the final RAVE score depends on those assumptions.
+rubric behind each tier.
 
 ## Running it
 
@@ -154,14 +154,14 @@ The integrated flow is:
 1. `verification.claim_extractor` — atomic claim extraction.
 2. `retrieval.hybrid` — TF-IDF + dense FAISS retrieval with RRF and deduplication.
 3. `verification.evidence_support` — local DeBERTa NLI passage-level support/contradiction judgement.
-4. `metrics.evidence_support_score` — net, relevance-weighted NLI entailment-minus-contradiction Evidence Support scores.
-5. `metrics.source_reliability` — RAVE authority and independent corroboration scores for retrieved sources.
+4. `metrics.evidence_support_score` — banded, relevance-weighted NLI Evidence Support scores: clear support `70-100`, mixed evidence `30-70`, and clear contradiction `0-30`.
+5. `metrics.source_reliability` — banded RAVE scores that combine source authority with NLI support or contradiction.
 6. `metrics.answer_stability` — a 70% MiniLM semantic cosine / 30% Jaccard hybrid score across three locally sampled Ollama responses (temperature 0.7).
 7. `citation.pipeline` — citation extraction/resolution + MiniLM/NLI citation-quality scoring.
 8. `trust_aggregator` — availability-aware weighted composite of the four existing metric outputs (40% evidence support, 25% source reliability, 20% answer consistency, 15% citation quality).
 9. `decision_engine` and `trust_report` — accept/regenerate recommendation plus a plain-language, claim-by-claim explanation.
 
-When `answer` is omitted, local Ollama runs `qwen3:1.7b` to generate a concise answer from `question` (up to 250 tokens). The same local model extracts claims. Local DeBERTa NLI judges Evidence Support, RAVE evaluates the authority and corroboration of those retrieved sources, and Citation Quality scores the same passages automatically. Answer Stability then samples three varied local answers at temperature 0.7 and scores their pairwise agreement. Supply `stability_responses` when you want to score a specific set of answers instead.
+When `answer` is omitted, local Ollama runs `qwen3:1.7b` to generate a concise answer from `question` (up to 250 tokens). The same local model extracts claims. Local DeBERTa NLI judges Evidence Support, RAVE combines the authority tier and NLI relationship of those retrieved sources, and Citation Quality scores the same passages automatically. Answer Stability then samples three varied local answers at temperature 0.7 and scores their pairwise agreement. Supply `stability_responses` when you want to score a specific set of answers instead.
 
 For an interactive run, use:
 
@@ -181,7 +181,7 @@ The script asks for a question, generates an answer locally, and evaluates it. N
 
 - `data.schema` is the canonical schema. `data.evidence_schema` is now only a backwards-compatible re-export so teammate code does not create a second incompatible `EvidencePassage` type.
 - Hybrid RRF scores are ranking scores, not cosine similarities. Evidence Support normalizes the final fused retrieval score only to weight the NLI judgments relative to one another for a claim.
-- RAVE measures the reliability and agreement of retrieved evidence; it does not determine whether the generated answer is supported. Organisation-level independence is approximate because WHO, CDC, and MedlinePlus can rely on overlapping guidance.
+- RAVE combines source authority with whether retrieved evidence supports or contradicts the generated answer. Organisation-level independence is approximate because WHO, CDC, and MedlinePlus can rely on overlapping guidance.
 
 Run the offline integration checks with:
 

@@ -1,9 +1,8 @@
-"""Claim-level RAVE source reliability.
+"""Authority-weighted, answer-aligned RAVE scoring.
 
-RAVE measures the authority and independent corroboration of the retrieved
-evidence.  It is intentionally separate from Evidence Support: reliable
-sources can consistently contradict an answer, which should lower Evidence
-Support but not make those sources unreliable.
+RAVE measures whether retrieved evidence from sources of different authority
+tiers supports or contradicts a generated claim. Evidence Support aggregates
+every retrieved passage; RAVE first deduplicates them into independent sources.
 """
 
 from __future__ import annotations
@@ -16,66 +15,39 @@ from data.source_registry import baseline_authority
 from verification.evidence_support import EvidenceSupportResult, PassageJudgment
 
 
-DEFAULT_ALPHA = 0.7
+NLI_CONFIDENCE_THRESHOLD = 0.55
 
-# Sensitivity scenarios test whether RAVE conclusions change under reasonable
-# alternative authority-tier assumptions. They do not replace the registry's
-# current configuration used by the integrated pipeline.
-DEFAULT_SENSITIVITY_SCENARIOS = {
-    "conservative": {
-        "who": 0.90, "openfda": 0.90, "cdc": 0.90,
-        "medlineplus": 0.80,
-        "pubmed": 0.65, "pubmedqa_context": 0.65,
-    },
-    "current": {
-        "who": 0.95, "openfda": 0.95, "cdc": 0.95,
-        "medlineplus": 0.85,
-        "pubmed": 0.75, "pubmedqa_context": 0.70,
-    },
-    "literature_favouring": {
-        "who": 0.95, "openfda": 0.95, "cdc": 0.95,
-        "medlineplus": 0.85,
-        "pubmed": 0.85, "pubmedqa_context": 0.85,
-    },
+# Values are human-readable percentages. RAVE stores the final score as a
+# fraction in [0, 1] so it remains compatible with the trust aggregator.
+_BANDS = {
+    "high": {"support": (85.0, 100.0), "contradiction": (0.0, 15.0)},
+    "medium": {"support": (75.0, 90.0), "contradiction": (10.0, 25.0)},
+    "lower": {"support": (65.0, 80.0), "contradiction": (20.0, 35.0)},
 }
 
 _SOURCE_ALIASES = {
-    "who": "who",
-    "world health organization": "who",
-    "cdc": "cdc",
-    "centers for disease control and prevention": "cdc",
-    "openfda": "openfda",
-    "fda": "openfda",
+    "who": "who", "world health organization": "who",
+    "cdc": "cdc", "centers for disease control and prevention": "cdc",
+    "openfda": "openfda", "fda": "openfda",
     "food and drug administration": "openfda",
-    "medlineplus": "medlineplus",
-    "nih / medlineplus": "medlineplus",
-    "nih/medlineplus": "medlineplus",
-    "nih medlineplus": "medlineplus",
-    "pubmed": "pubmed",
-    "pubmedqa-context": "pubmedqa_context",
+    "medlineplus": "medlineplus", "nih / medlineplus": "medlineplus",
+    "nih/medlineplus": "medlineplus", "nih medlineplus": "medlineplus",
+    "pubmed": "pubmed", "pubmedqa-context": "pubmedqa_context",
 }
 
 
 def normalize_source_name(source_name: str) -> Optional[str]:
-    """Map corpus labels to the registry key used for baseline authority."""
-    cleaned = " ".join(source_name.lower().split())
-    return _SOURCE_ALIASES.get(cleaned)
+    """Map corpus labels to the source-authority registry key."""
+    return _SOURCE_ALIASES.get(" ".join(source_name.lower().split()))
 
 
 def _passage_source_key(passage: EvidencePassage) -> Optional[str]:
-    """Return the rated source key, excluding unverified FAERS reports.
-
-    The present corpus only pulls FDA structured labels.  If a future corpus
-    adds openFDA drug-event/FAERS records, they must receive their own policy
-    and cannot silently inherit the regulatory-label authority score.
-    """
+    """Return the source key, excluding unverified FAERS reports."""
     source_key = normalize_source_name(passage.source_name)
     if source_key != "openfda":
         return source_key
     fingerprint = f"{passage.title} {passage.url}".lower()
-    if "faers" in fingerprint or "drug/event" in fingerprint:
-        return None
-    return source_key
+    return None if "faers" in fingerprint or "drug/event" in fingerprint else source_key
 
 
 def _base_identifier(identifier: str, passage_id: str) -> str:
@@ -85,12 +57,7 @@ def _base_identifier(identifier: str, passage_id: str) -> str:
 
 
 def source_identity(passage: EvidencePassage) -> Optional[str]:
-    """Return the unit treated as independent for corroboration.
-
-    Individual PubMed PMIDs are independent.  For the first version, WHO,
-    CDC, MedlinePlus, and FDA label evidence are treated as organisation-level
-    groups because their documents can share editorial guidance.
-    """
+    """Return the unit treated as independent for RAVE aggregation."""
     source_key = _passage_source_key(passage)
     if source_key is None:
         return None
@@ -99,13 +66,49 @@ def source_identity(passage: EvidencePassage) -> Optional[str]:
     return source_key
 
 
-def _stance_confidence(judgment: PassageJudgment) -> tuple[Optional[str], float]:
-    verdict = judgment.verdict.upper()
-    if verdict == "SUPPORTED":
-        return "SUPPORTED", max(0.0, judgment.entailment_probability)
-    if verdict == "CONTRADICTED":
-        return "CONTRADICTED", max(0.0, judgment.contradiction_probability)
-    return None, 0.0
+def _direction(judgment: PassageJudgment) -> tuple[str, float]:
+    """Classify one passage using the documented 0.55 NLI threshold."""
+    entailment = max(0.0, judgment.entailment_probability)
+    contradiction = max(0.0, judgment.contradiction_probability)
+    if entailment >= NLI_CONFIDENCE_THRESHOLD and entailment > contradiction:
+        return "SUPPORTS", entailment
+    if contradiction >= NLI_CONFIDENCE_THRESHOLD and contradiction > entailment:
+        return "CONTRADICTS", contradiction
+    return "INCONCLUSIVE", max(0.0, judgment.neutral_probability)
+
+
+def _judgment_strength(judgment: PassageJudgment) -> float:
+    """Choose the strongest duplicate chunk without counting it twice."""
+    status, confidence = _direction(judgment)
+    if status != "INCONCLUSIVE":
+        return confidence
+    return max(confidence, judgment.entailment_probability, judgment.contradiction_probability)
+
+
+def _tier(baseline: float) -> str:
+    if baseline >= 0.90:
+        return "high"
+    if baseline >= 0.80:
+        return "medium"
+    return "lower"
+
+
+def _banded_score(status: str, confidence: float, baseline: float) -> float:
+    """Return the RAVE fraction for one source according to its scenario band."""
+    if status in {"INCONCLUSIVE", "INTERNALLY_CONFLICTED"}:
+        return 0.50
+
+    strength = max(0.0, min(1.0, (confidence - NLI_CONFIDENCE_THRESHOLD) / (1.0 - NLI_CONFIDENCE_THRESHOLD)))
+    band = _BANDS[_tier(baseline)]
+    if status == "SUPPORTS":
+        lower, upper = band["support"]
+        percent = lower + (upper - lower) * strength
+    elif status == "CONTRADICTS":
+        lower, upper = band["contradiction"]
+        percent = upper - (upper - lower) * strength
+    else:
+        raise ValueError(f"Unknown RAVE source status: {status}")
+    return percent / 100.0
 
 
 @dataclass
@@ -118,7 +121,7 @@ class SourceRAVEResult:
     nli_confidence: float
     baseline_authority: Optional[float]
     corroboration: Optional[float]
-    rave_score: Optional[float]
+    rave_score: float
     n_independent_sources: int
     status: str
     evidence_ids: list[str] = field(default_factory=list)
@@ -153,8 +156,8 @@ class ResponseRAVEResult:
     coverage: float
     claim_results: list[ClaimRAVEResult] = field(default_factory=list)
     note: str = (
-        "RAVE measures the reliability and agreement of retrieved evidence; "
-        "it does not determine whether the generated answer is supported."
+        "RAVE combines source authority with whether retrieved evidence supports "
+        "or contradicts the generated answer."
     )
 
     def to_dict(self) -> dict:
@@ -176,47 +179,30 @@ class _SourceCandidate:
     source_key: str
     source_name: str
     baseline: float
-    stance: Optional[str]
+    status: str
     confidence: float
+    retrieval_weight: float
     evidence_ids: list[str]
-    internally_conflicted: bool = False
 
 
-def _document_candidates(
-    result: EvidenceSupportResult,
-) -> Iterable[tuple[EvidencePassage, PassageJudgment]]:
+def _document_candidates(result: EvidenceSupportResult) -> Iterable[tuple[EvidencePassage, PassageJudgment]]:
     """Use only the strongest NLI judgement from duplicate document chunks."""
     by_document: dict[tuple[str, str], tuple[EvidencePassage, PassageJudgment, float]] = {}
     judgment_by_id = {item.evidence_id: item for item in result.passage_judgments}
     for evidence_id, passage in result.evidence_passages.items():
         judgment = judgment_by_id.get(evidence_id)
-        if judgment is None:
-            continue
         source_key = _passage_source_key(passage)
-        if source_key is None:
+        if judgment is None or source_key is None:
             continue
         document_key = (source_key, _base_identifier(passage.identifier, passage.passage_id))
-        _, confidence = _stance_confidence(judgment)
+        strength = _judgment_strength(judgment)
         current = by_document.get(document_key)
-        if current is None or confidence > current[2]:
-            by_document[document_key] = (passage, judgment, confidence)
+        if current is None or strength > current[2]:
+            by_document[document_key] = (passage, judgment, strength)
     return [(passage, judgment) for passage, judgment, _ in by_document.values()]
 
 
-def _baseline(source_key: str, overrides: Optional[dict[str, float]]) -> float:
-    """Use an analysis override when supplied, otherwise the registry value."""
-    if overrides is not None and source_key in overrides:
-        value = float(overrides[source_key])
-        if not 0.0 <= value <= 1.0:
-            raise ValueError("baseline overrides must be between 0 and 1.")
-        return value
-    return baseline_authority(source_key)
-
-
-def _source_candidates(
-    result: EvidenceSupportResult,
-    baseline_overrides: Optional[dict[str, float]] = None,
-) -> list[_SourceCandidate]:
+def _source_candidates(result: EvidenceSupportResult) -> list[_SourceCandidate]:
     grouped: dict[str, list[tuple[EvidencePassage, PassageJudgment]]] = {}
     for passage, judgment in _document_candidates(result):
         identity = source_identity(passage)
@@ -229,162 +215,99 @@ def _source_candidates(
         source_key = _passage_source_key(passage)
         if source_key is None:
             continue
-        non_neutral = [
-            (item, *_stance_confidence(judgment))
-            for item, judgment in records
-            if _stance_confidence(judgment)[0] is not None
-        ]
-        stances = {stance for _, stance, _ in non_neutral}
-        evidence_ids = [judgment.evidence_id for _, judgment in records]
-        if len(stances) > 1:
-            candidates.append(_SourceCandidate(
-                source_id=identity,
-                source_key=source_key,
-                source_name=passage.source_name,
-                baseline=_baseline(source_key, baseline_overrides),
-                stance=None,
-                confidence=0.0,
-                evidence_ids=evidence_ids,
-                internally_conflicted=True,
-            ))
-            continue
-        if not non_neutral:
-            candidates.append(_SourceCandidate(
-                source_id=identity,
-                source_key=source_key,
-                source_name=passage.source_name,
-                baseline=_baseline(source_key, baseline_overrides),
-                stance=None,
-                confidence=0.0,
-                evidence_ids=evidence_ids,
-            ))
-            continue
-        _, stance, confidence = max(non_neutral, key=lambda item: item[2])
+        directions = [(item, *_direction(judgment), judgment) for item, judgment in records]
+        strong_statuses = {status for _, status, _, _ in directions if status in {"SUPPORTS", "CONTRADICTS"}}
+        selected = max(directions, key=lambda item: _judgment_strength(item[3]))
+        if len(strong_statuses) > 1:
+            status, confidence = "INTERNALLY_CONFLICTED", 0.0
+        else:
+            _, status, confidence, _ = selected
+        selected_judgment = selected[3]
+        retrieval_weight = max(0.0, selected_judgment.retrieval_weight)
+        if retrieval_weight == 0.0:
+            retrieval_weight = max(0.0, selected_judgment.retrieval_score)
         candidates.append(_SourceCandidate(
             source_id=identity,
             source_key=source_key,
             source_name=passage.source_name,
-            baseline=_baseline(source_key, baseline_overrides),
-            stance=stance,
+            baseline=baseline_authority(source_key),
+            status=status,
             confidence=confidence,
-            evidence_ids=evidence_ids,
+            retrieval_weight=retrieval_weight,
+            evidence_ids=[judgment.evidence_id for _, judgment in records],
         ))
     return candidates
 
 
-def calculate_claim_rave(
-    result: EvidenceSupportResult,
-    alpha: float = DEFAULT_ALPHA,
-    baseline_overrides: Optional[dict[str, float]] = None,
-) -> ClaimRAVEResult:
-    """Calculate source RAVE scores and their weighted claim-level mean."""
-    if not 0.0 <= alpha <= 1.0:
-        raise ValueError("alpha must be between 0 and 1.")
-    candidates = _source_candidates(result, baseline_overrides=baseline_overrides)
-    valid = [item for item in candidates if item.stance is not None]
+def _corroboration(candidate: _SourceCandidate, candidates: list[_SourceCandidate]) -> Optional[float]:
+    """Keep peer agreement as a diagnostic; it no longer changes RAVE."""
+    if candidate.status not in {"SUPPORTS", "CONTRADICTS"}:
+        return None
+    peers = [
+        item for item in candidates
+        if item.source_id != candidate.source_id and item.status in {"SUPPORTS", "CONTRADICTS"}
+    ]
+    if not peers:
+        return None
+    total = sum(item.retrieval_weight for item in peers)
+    agreeing = sum(item.retrieval_weight for item in peers if item.status == candidate.status)
+    return agreeing / total if total else None
+
+
+def calculate_claim_rave(result: EvidenceSupportResult) -> ClaimRAVEResult:
+    """Calculate the hybrid-retrieval-weighted RAVE score for one claim."""
+    candidates = _source_candidates(result)
     source_results: list[SourceRAVEResult] = []
-
     for candidate in candidates:
-        if candidate.internally_conflicted:
-            source_results.append(SourceRAVEResult(
-                claim_id=result.claim_id,
-                source_id=candidate.source_id,
-                source_key=candidate.source_key,
-                source_name=candidate.source_name,
-                stance=None,
-                nli_confidence=0.0,
-                baseline_authority=candidate.baseline,
-                corroboration=None,
-                rave_score=None,
-                n_independent_sources=0,
-                status="INTERNALLY_CONFLICTED",
-                evidence_ids=candidate.evidence_ids,
-            ))
-            continue
-        if candidate.stance is None:
-            source_results.append(SourceRAVEResult(
-                claim_id=result.claim_id,
-                source_id=candidate.source_id,
-                source_key=candidate.source_key,
-                source_name=candidate.source_name,
-                stance=None,
-                nli_confidence=0.0,
-                baseline_authority=candidate.baseline,
-                corroboration=None,
-                rave_score=None,
-                n_independent_sources=0,
-                status="NEUTRAL",
-                evidence_ids=candidate.evidence_ids,
-            ))
-            continue
-
-        peers = [item for item in valid if item.source_id != candidate.source_id]
-        if not peers:
-            corroboration = None
-            # Missing independent evidence is not disagreement. Keep the
-            # authority visible, but do not present it as a full RAVE score.
-            score = None
-            status = "UNCORROBORATED"
-        else:
-            peer_weight = sum(item.baseline * item.confidence for item in peers)
-            agreement = sum(
-                item.baseline * item.confidence
-                for item in peers
-                if item.stance == candidate.stance
-            )
-            corroboration = agreement / peer_weight if peer_weight else None
-            score = alpha * candidate.baseline + (1.0 - alpha) * (corroboration or 0.0)
-            status = "CORROBORATED" if corroboration >= 0.5 else "DISAGREED"
+        peers = [item for item in candidates if item.source_id != candidate.source_id]
+        agreement = _corroboration(candidate, candidates)
         source_results.append(SourceRAVEResult(
             claim_id=result.claim_id,
             source_id=candidate.source_id,
             source_key=candidate.source_key,
             source_name=candidate.source_name,
-            stance=candidate.stance,
+            stance=candidate.status if candidate.status in {"SUPPORTS", "CONTRADICTS"} else None,
             nli_confidence=round(candidate.confidence, 4),
             baseline_authority=candidate.baseline,
-            corroboration=round(corroboration, 4) if corroboration is not None else None,
-            rave_score=round(score, 4) if score is not None else None,
+            corroboration=round(agreement, 4) if agreement is not None else None,
+            rave_score=round(_banded_score(candidate.status, candidate.confidence, candidate.baseline), 4),
             n_independent_sources=len(peers),
-            status=status,
+            status=candidate.status,
             evidence_ids=candidate.evidence_ids,
         ))
 
-    scored = [item for item in source_results if item.rave_score is not None]
-    if not scored:
+    if not source_results:
         return ClaimRAVEResult(
-            claim_id=result.claim_id,
-            claim_text=result.claim_text,
-            rave_score=None,
-            status="NO_USABLE_SOURCE_EVIDENCE",
-            source_results=source_results,
+            result.claim_id,
+            result.claim_text,
+            None,
+            "NO_RETRIEVED_SOURCE_EVIDENCE",
+            [],
         )
-    total_confidence = sum(item.nli_confidence for item in scored)
-    claim_score = (
-        sum(item.rave_score * item.nli_confidence for item in scored) / total_confidence
-        if total_confidence else None
+
+    weights = [max(0.0, item.retrieval_weight) for item in candidates]
+    total_weight = sum(weights)
+    if total_weight == 0.0:
+        weights = [1.0 / len(source_results)] * len(source_results)
+    else:
+        weights = [weight / total_weight for weight in weights]
+    claim_score = sum(item.rave_score * weight for item, weight in zip(source_results, weights))
+    statuses = {item.status for item in source_results}
+    claim_status = (
+        "INTERNALLY_CONFLICTED" if "INTERNALLY_CONFLICTED" in statuses else
+        "MIXED" if {"SUPPORTS", "CONTRADICTS"}.issubset(statuses) else
+        "SUPPORTS" if "SUPPORTS" in statuses else
+        "CONTRADICTS" if "CONTRADICTS" in statuses else
+        "INCONCLUSIVE"
     )
     return ClaimRAVEResult(
-        claim_id=result.claim_id,
-        claim_text=result.claim_text,
-        rave_score=round(claim_score, 4) if claim_score is not None else None,
-        status="COMPUTED",
-        source_results=source_results,
+        result.claim_id, result.claim_text, round(claim_score, 4), claim_status, source_results
     )
 
 
-def calculate_response_rave(
-    evidence_results: list[EvidenceSupportResult],
-    alpha: float = DEFAULT_ALPHA,
-    baseline_overrides: Optional[dict[str, float]] = None,
-) -> ResponseRAVEResult:
-    """Calculate RAVE across claims, excluding claims with no usable evidence."""
-    claims = [
-        calculate_claim_rave(
-            result, alpha=alpha, baseline_overrides=baseline_overrides
-        )
-        for result in evidence_results
-    ]
+def calculate_response_rave(evidence_results: list[EvidenceSupportResult]) -> ResponseRAVEResult:
+    """Calculate answer-level RAVE as the mean of its claim scores."""
+    claims = [calculate_claim_rave(result) for result in evidence_results]
     scored = [item.rave_score for item in claims if item.rave_score is not None]
     score = round(sum(scored) / len(scored), 4) if scored else None
     total = len(claims)
@@ -395,32 +318,3 @@ def calculate_response_rave(
         coverage=(len(scored) / total) if total else 0.0,
         claim_results=claims,
     )
-
-
-def run_rave_sensitivity_analysis(
-    evidence_results: list[EvidenceSupportResult],
-    alpha: float = DEFAULT_ALPHA,
-    scenarios: Optional[dict[str, dict[str, float]]] = None,
-) -> dict:
-    """Recalculate RAVE under documented baseline-authority scenarios.
-
-    This supports final-review analysis: stable results across these scenarios
-    are evidence that the conclusion is not dependent on one exact baseline.
-    """
-    active_scenarios = scenarios or DEFAULT_SENSITIVITY_SCENARIOS
-    reports = {
-        name: calculate_response_rave(
-            evidence_results,
-            alpha=alpha,
-            baseline_overrides=overrides,
-        ).to_dict()
-        for name, overrides in active_scenarios.items()
-    }
-    scores = [report["rave_score"] for report in reports.values() if report["rave_score"] is not None]
-    return {
-        "alpha": alpha,
-        "scenarios": reports,
-        "rave_score_range": (
-            {"minimum": min(scores), "maximum": max(scores)} if scores else None
-        ),
-    }

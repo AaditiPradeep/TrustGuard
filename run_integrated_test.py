@@ -62,14 +62,6 @@ for index, claim in enumerate(rave["claim_results"], start=1):
     print(f"{index}. {claim['status']} — {score}")
     print(f"   Sources: {sources}")
 print(rave["note"])
-analysis = rave["sensitivity_analysis"]
-if analysis["rave_score_range"] is not None:
-    score_range = analysis["rave_score_range"]
-    print(
-        "Sensitivity range across documented baseline scenarios: "
-        f"{score_range['minimum'] * 100:.2f}–{score_range['maximum'] * 100:.2f}/100"
-    )
-
 citation = result.citation_quality
 print("\n" + "-" * 80)
 print("CITATION QUALITY DETAILS")

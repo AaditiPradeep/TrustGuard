@@ -77,7 +77,7 @@ def _metric_explanation(metric: str, score: float) -> str:
     level = "strong" if score >= .80 else "some" if score >= .60 else "limited"
     descriptions = {
         "evidence_support": "how well the retrieved material backs up the answer's claims",
-        "source_reliability": "how authoritative the sources are and whether independent sources agree",
+        "source_reliability": "whether authoritative retrieved sources support or contradict the answer",
         "answer_stability": "whether repeated answers to the same question stay consistent",
         "citation_quality": "how directly the retrieved source material relates to the claims",
     }

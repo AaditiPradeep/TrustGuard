@@ -1,8 +1,8 @@
-"""Net NLI Evidence Support scoring.
+"""Banded NLI Evidence Support scoring.
 
-The score is weighted entailment minus weighted contradiction. This avoids the
-old ratio's saturation problem, where any claim with support and no retrieved
-contradiction was automatically assigned 100/100.
+Evidence Support uses relevance-weighted DeBERTa entailment and contradiction
+probabilities. Clear net support maps to 70-100, clear net contradiction maps
+to 0-30, and mixed or inconclusive evidence remains in the 30-70 middle band.
 """
 
 from __future__ import annotations
@@ -10,6 +10,9 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 
 from verification.evidence_support import EvidenceSupportResult
+
+
+NET_MARGIN_THRESHOLD = 0.20
 
 
 @dataclass
@@ -60,13 +63,32 @@ def _weights(result: EvidenceSupportResult) -> list[float]:
     return [1.0 / len(values)] * len(values) if values else []
 
 
-def calculate_claim_evidence_score(result: EvidenceSupportResult) -> ClaimEvidenceScore:
-    """Compute net NLI evidence strength using hybrid retrieval weights.
+def _banded_evidence_score(
+    support: float,
+    contradiction: float,
+    supporting_passages: int,
+    contradicting_passages: int,
+) -> tuple[float, str]:
+    """Map the net NLI margin into support, mixed, and contradiction bands.
 
-    Every passage contributes its full entailment and contradiction
-    probabilities. Neutral passages normally contribute little to either
-    value, instead of being able to inflate a support-only ratio.
+    A margin of +0.20 is the point where support enters the 70-100 band;
+    -0.20 is the equivalent point for the 0-30 contradiction band. The middle
+    band retains uncertainty instead of treating any positive signal as proof.
     """
+    margin = support - contradiction
+    if margin >= NET_MARGIN_THRESHOLD:
+        strength = min(1.0, (margin - NET_MARGIN_THRESHOLD) / (1.0 - NET_MARGIN_THRESHOLD))
+        return 70.0 + 30.0 * strength, "SUPPORTED"
+    if margin <= -NET_MARGIN_THRESHOLD:
+        strength = min(1.0, (-margin - NET_MARGIN_THRESHOLD) / (1.0 - NET_MARGIN_THRESHOLD))
+        return 30.0 - 30.0 * strength, "CONTRADICTED"
+    if supporting_passages == 0 and contradicting_passages == 0:
+        return 50.0, "UNVERIFIED"
+    return max(30.0, min(70.0, 50.0 + 100.0 * margin)), "MIXED"
+
+
+def calculate_claim_evidence_score(result: EvidenceSupportResult) -> ClaimEvidenceScore:
+    """Compute banded, relevance-weighted NLI support for one claim."""
     support = contradiction = 0.0
     supporting = contradicting = irrelevant = 0
     for judgment, weight in zip(result.passage_judgments, _weights(result)):
@@ -80,16 +102,13 @@ def calculate_claim_evidence_score(result: EvidenceSupportResult) -> ClaimEviden
         else:
             irrelevant += 1
 
-    score = round(max(0.0, support - contradiction) * 100.0, 2)
-    status = (
-        "MIXED" if supporting and contradicting else
-        "SUPPORTED" if supporting else
-        "CONTRADICTED" if contradicting else "UNVERIFIED"
+    score, status = _banded_evidence_score(
+        support, contradiction, supporting, contradicting
     )
     return ClaimEvidenceScore(
         claim_id=result.claim_id,
         claim_text=result.claim_text,
-        score=score,
+        score=round(score, 2),
         status=status,
         support_weight=round(support, 4),
         contradiction_weight=round(contradiction, 4),

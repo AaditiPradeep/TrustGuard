@@ -80,6 +80,7 @@ def run_trustguard(
     stability_generator: Optional[Callable[[str], str]] = None,
     stability_model_name: str = "qwen3:1.7b",
     stability_samples: int = 3,
+    compute_stability: bool = True,
 ) -> TrustGuardResult:
     """Run every currently implemented TrustGuard component together.
 
@@ -139,7 +140,12 @@ def run_trustguard(
 
     # Person 2: response-level stability.
     stability_payload = None
-    if stability_responses is not None:
+    if not compute_stability:
+        # Fixed-answer corruption experiments deliberately hold answer
+        # generation out of scope.  The aggregator redistributes its weight
+        # across Evidence Support, RAVE, and Citation Quality.
+        stability_payload = None
+    elif stability_responses is not None:
         responses = list(stability_responses)
         if len(responses) < 2:
             raise ValueError("stability_responses must contain at least 2 responses.")

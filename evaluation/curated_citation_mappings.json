@@ -1,0 +1,63 @@
+{
+  "q002": [
+    {"source_id": "fe3c162fc9b1504a", "sentence_index": 0},
+    {"source_id": "38fa1bdc0c0a8e99", "sentence_index": 2},
+    {"source_id": "b29160ff28cd2c73", "sentence_index": 3}
+  ],
+  "q003": [
+    {"source_id": "66d3f76f8a92abd2", "sentence_index": 4},
+    {"source_id": "2fd61388f53972cb", "sentence_index": 4}
+  ],
+  "q006": [
+    {"source_id": "e21f033400e2e613", "sentence_index": 0},
+    {"source_id": "cc5b1c97bfce103f", "sentence_index": 1}
+  ],
+  "q007": [
+    {"source_id": "df8bcd8c5f9d90a3", "sentence_index": 0},
+    {"source_id": "4ed51ce26f35f062", "sentence_index": 1}
+  ],
+  "q008": [
+    {"source_id": "8b8feb36739c955c", "sentence_index": 0},
+    {"source_id": "27523e807bbbcfa7", "sentence_index": 0},
+    {"source_id": "7cb7ebfe79137d97", "sentence_index": 0}
+  ],
+  "q009": [
+    {"source_id": "d44cf114def50c62", "sentence_index": 0},
+    {"source_id": "8cc9effe74ca173e", "sentence_index": 1},
+    {"source_id": "a999203145295570", "sentence_index": 2}
+  ],
+  "q011": [
+    {"source_id": "bb3d982609d22695", "sentence_index": 0},
+    {"source_id": "275ac874f7d95a5b", "sentence_index": 1},
+    {"source_id": "5d59b480c2038bba", "sentence_index": 3}
+  ],
+  "q012": [
+    {"source_id": "031b8dc2e1532773", "sentence_index": 0},
+    {"source_id": "25feb86e4f39b104", "sentence_index": 1},
+    {"source_id": "13386f4d3a616855", "sentence_index": 3}
+  ],
+  "q014": [
+    {"source_id": "e767e9f7a2a9dfb9", "sentence_index": 0},
+    {"source_id": "cf0f9e100c7abaa1", "sentence_index": 2},
+    {"source_id": "1a6a7962c7e21d2e", "sentence_index": 2}
+  ],
+  "q015": [
+    {"source_id": "1cd293851b224e2d", "sentence_index": 0},
+    {"source_id": "b6d1a7ad9862885d", "sentence_index": 1},
+    {"source_id": "452692782a8f7717", "sentence_index": 2}
+  ],
+  "q016": [
+    {"source_id": "2fc508fd30a5918a", "sentence_index": 0},
+    {"source_id": "0878d89c8a4014b9", "sentence_index": 3},
+    {"source_id": "92ac9d6a7ed78ac7", "sentence_index": 4}
+  ],
+  "q020": [
+    {"source_id": "cf0f9e100c7abaa1", "sentence_index": 0},
+    {"source_id": "1a6a7962c7e21d2e", "sentence_index": 2},
+    {"source_id": "a28957b32d21276d", "sentence_index": 1}
+  ],
+  "q022": [
+    {"source_id": "fdf573d5c98590b5", "sentence_index": 0},
+    {"source_id": "7cb7ebfe79137d97", "sentence_index": 2}
+  ]
+}
